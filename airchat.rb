@@ -165,7 +165,7 @@ class Airchat
 
   def handle_message(from:, data:)
     if data =~ /^#{@preamble}/
-      last_4 = from[-4..-1].unpack("H*").first
+      suffix = from[-3..-1].unpack("H*").first
 
       json = data.sub(@preamble, '')
       msg = Message.parse(json)
@@ -180,7 +180,7 @@ class Airchat
       end
 
       nick = msg.from || @ip_to_host[from] || 'unknown'
-      from = "#{nick}@#{last_4}"
+      from = "#{nick}@#{suffix}"
       case msg.event
       when 'join'
         status_output "#{from} has joined"
