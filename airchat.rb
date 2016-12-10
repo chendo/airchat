@@ -15,6 +15,7 @@ require "open3"
 require "fileutils"
 require "timeout"
 require "digest/sha1"
+require "io/console"
 
 # Airchat protocol
 # JSON
@@ -79,8 +80,43 @@ class String
   end
 end
 
-def eputs(str)
-  $stderr.puts ANSIColor.paint(str, :red)
+STDOUT.sync = true
+
+class SimpleCurses
+  CLEAR_LINE = "\e[2K"
+  def initialize
+    @mutex = Mutex.new
+  end
+
+  def readline(prompt = "> ", hide = true)
+    @prompt = prompt
+    @reading = true
+    str = Readline.readline(prompt)
+    @reading = false
+    print "\033[1A\r#{CLEAR_LINE}"
+    return str
+  end
+
+  def cur_pos
+    STDOUT.noecho do
+      print "\033[6n"
+      STDIN.gets('R') =~ /\[(\d+);(\d+)R/
+    end
+    [$1.to_i, $2.to_i]
+  end
+
+  def redisplay
+    buffer = @reading ? Readline.line_buffer : ""
+    point = @reading ? Readline.point : 0
+    print "\r#{CLEAR_LINE}#{@prompt}#{buffer}#{"\b" * (buffer.length - point)}"
+  end
+
+  def puts(str, io = STDOUT)
+    @mutex.synchronize do
+      io.puts "\r#{CLEAR_LINE}#{str}"
+      redisplay
+    end
+  end
 end
 
 class Airchat
@@ -93,25 +129,30 @@ class Airchat
     @seen_messages = []
     @socket = UDPSocket.new(Socket::AF_INET6)
     @socket.connect('ff02::fb%awdl0', @port)
-    @output_mutex = Mutex.new
     @last_awdl_activity = Time.at(0)
     @ip_last_seen = {}
     @ip_nick = {}
     @ip_timed_out = {}
+    @simple_curses = SimpleCurses.new
   end
 
   def check_permissions
     Dir["/dev/bpf*"].each do |f|
       FileUtils.touch(f)
     end
-  rescue Errno::EPERM
+  rescue Errno::EPERM, Errno::EACCESS
     eputs "AirChat does not have permissions to access the AirDrop interface."
     eputs "Please run: `sudo chgrp staff /dev/bpf* && sudo chmod g+rw /dev/bpf*`"
     eputs "re-run AirChat as root with `sudo ./airchat.rb`"
     exit 1
   end
 
+  def eputs(str)
+    @simple_curses.puts(str, STDERR)
+  end
+
   def check_airdrop
+    return if ENV['SKIP_CHECK']
     print "Checking if AirDrop is running.".c(:yellow)
     begin
       Timeout.timeout(5) do
@@ -125,6 +166,7 @@ class Airchat
       puts "AirDrop not running, opening AirDrop window...".c(:orange)
       open_airdrop_window
 
+
       begin
         print "Checking if AirDrop is working.".c(:yellow)
         Timeout.timeout(5) do
@@ -134,13 +176,13 @@ class Airchat
           end
         end
       rescue Timeout::Error
-        exit 1
       end
     end
     puts " OK".c(:green)
   end
 
   def airdrop_monitor
+    return if ENV['SKIP_CHECK']
     while true
       if Time.now - @last_awdl_activity > 60
         status_output("No AirDrop activity detected, opening AirDrop window...")
@@ -182,9 +224,10 @@ class Airchat
       airdrop_monitor
     end
 
+    puts
     print "Enter your nickname: ".c(:cyan)
 
-    @nick = gets.match(/(\w{1,32})/)[1]
+    @nick = gets.match(/(\w{0,32})/)[1]
     if @nick.length == 0
       @nick = "Guest#{rand(10000)}"
     end
@@ -199,24 +242,22 @@ class Airchat
 
     send_msg(:join)
 
-    line = nil
     while true
-      @output_mutex.synchronize do
-        line = Readline.readline(prompt_text).chomp
-        print "\033[1A\033[K"
-      end
+      line = @simple_curses.readline(prompt_text).chomp
 
       if line.length > 0
-        if line =~ /\/nick (\w{1,32})/
+        if line =~ /^\/nick (\w{1,32})/
           send_msg(:nick, new_nick: $1)
           @nick = $1
-        elsif line =~ /\/who/
+        elsif line =~ /^\/who/
           status_output("Users:")
           @ip_last_seen.each do |ip, time|
             nick = @ip_nick[ip] || "???"
 
             status_output("   #{nick}@#{ip} - seen #{(Time.now - time).round}s ago")
           end
+        elsif line =~ /^\//
+          status_output("Unknown command: #{line}".c(:red))
         else
           send_msg(:msg, msg: line)
         end
@@ -245,7 +286,6 @@ class Airchat
   def listen
     ip = nil
     len = 0
-    output_buffer = StringIO.new
     buffer = StringIO.new
 
     Open3.popen3("tcpdump -n --immediate-mode -l -x -i awdl0 udp and port #{@port}") do |i, o, e, t|
@@ -253,9 +293,12 @@ class Airchat
         if line =~ /IP6 ([0-9a-f:.]+).+ length (\d+)/
           ip = $1
           len = $2.to_i # This is hex
-        elsif line =~ /0x(\d{4}):  ([0-9a-f ]+)/
-          if $1.to_i >= 30 # We only want the UDP data, which starts at 0x0030
+        elsif line =~ /0x([0-9a-f]{4}):  ([0-9a-f ]+)/
+          if $1.to_i(16) >= 0x30 # We only want the UDP data, which starts at 0x0030
             buffer << [$2.gsub(' ', '')].pack("H*")
+            if buffer.length > len
+              raise "expected buffer length to be #{len} but got #{buffer.length}"
+            end
             if buffer.length == len
               handle_message(from: ip, data: buffer.string)
               buffer = StringIO.new
@@ -271,8 +314,10 @@ class Airchat
       i << <<-SCRIPT
       tell application "Finder"
           activate
+          delay 1
           tell application "System Events" to keystroke "R" using {command down, shift down}
-          set visible of application process "Finder" to false
+          delay 1
+          set collapsed of window 1 to true
       end tell
       SCRIPT
     end
@@ -287,7 +332,7 @@ class Airchat
   end
 
   def output(line)
-    puts "\r[#{Time.now.strftime("%H:%M:%S")}] #{line}"
+    @simple_curses.puts "\r[#{Time.now.strftime("%H:%M:%S")}] #{line}"
   end
 
   def status_output(line)
@@ -299,6 +344,7 @@ class Airchat
   end
 
   def handle_message(from:, data:)
+    print data if @debug
     return if @nick.nil? # We're not 'connected'
 
     if data =~ /^#{@preamble}/
@@ -328,6 +374,8 @@ class Airchat
         status_output "#{cnick} has joined from #{host}"
       when 'leave'
         status_output "#{cnick} has left (#{host})"
+        @ip_nick.delete(from)
+        @ip_last_seen.delete(from)
       when 'msg'
         output "[#{cnick}] #{msg.data}"
       when 'nick'
@@ -335,7 +383,6 @@ class Airchat
       when 'ping'
         send_msg(:pong)
       end
-      print prompt_text
     end
   end
 
