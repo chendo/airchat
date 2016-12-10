@@ -10,6 +10,7 @@ GEM
   remote: https://rubygems.org/
   specs:
     coderay (1.1.0)
+    curses (1.0.2)
     ffi (1.9.14)
     ffi-pcap (0.2.1)
       ffi (~> 1.0)
@@ -28,6 +29,7 @@ PLATFORMS
   ruby
 
 DEPENDENCIES
+  curses
   ffi-packets!
   ffi-pcap
   net-mdns

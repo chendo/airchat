@@ -3,6 +3,7 @@ Bundler.require
 
 require "ffi/pcap"
 require "ffi/packets"
+require "readline"
 
 module FFI::Packets
   module Ipv6
@@ -20,12 +21,30 @@ module FFI::Packets
 end
 
 class Airchat
-  def initialize(port: 1337)
+  def initialize(port: 1337, preamble: '__AIRCHAT:')
     @ip_to_host = {}
     @port = port
+    @preamble = preamble
+    @messages = []
   end
 
   def run
+    listen_thr = Thread.new do
+      listen
+    end
+
+    socket = UDPSocket.new(Socket::AF_INET6)
+    socket.connect('ff02::fb%awdl0', @port)
+    while true
+      line = Readline.readline(">> ")
+
+      if line.length > 0
+        socket.puts("#{@preamble}#{line}")
+      end
+    end
+  end
+
+  def listen
     @pcap = FFI::Pcap::Live.new(
       device: 'awdl0',
       timeout: 1,
@@ -58,10 +77,10 @@ class Airchat
   end
 
   def handle_message(from:, data:)
-    if data =~ /^__AIRCHAT:/
+    if data =~ /^#{@preamble}/
       last_4 = from[-4..-1].unpack("H*").first
       host = @ip_to_host[from] || 'unknown'
-      puts "[#{host}/#{last_4}] #{data.sub('__AIRCHAT:', '')}"
+      puts "[#{host}/#{last_4}] #{data.sub(@preamble, '')}"
     end
   end
 
