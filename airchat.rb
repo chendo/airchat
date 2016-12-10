@@ -73,18 +73,18 @@ class Airchat
 end
 
 class Airchat
+  RELIABILITY_FACTOR = 3 # lol
   def initialize(port: 1337, preamble: '__AIRCHAT:')
     @ip_to_host = {}
     @port = port
     @preamble = preamble
     @seen_messages = []
-    @nick = "Guest#{rand(1000)}"
     @socket = UDPSocket.new(Socket::AF_INET6)
     @socket.connect('ff02::fb%awdl0', @port)
   end
 
   def prompt_text
-    ">> "
+    "[#{@nick}] "
   end
 
   def write(msg)
@@ -93,10 +93,15 @@ class Airchat
 
   def send_msg(type, **args)
     msg = Message.send(type, **{from: @nick}.merge(args))
-    3.times { write(msg) }
+    RELIABILITY_FACTOR.times { write(msg) }
   end
 
   def run
+    print "Enter your nickname: "
+    @nick = gets.match(/(\w{1,32})/)[1]
+    if @nick.length == 0
+      @nick = "Guest#{rand(10000)}"
+    end
     at_exit do
       send_msg(:leave)
     end
@@ -112,7 +117,6 @@ class Airchat
       print "\033[1A\033[K"
 
       if line.length > 0
-
         if line =~ /\/nick (\w{1,32})/
           send_msg(:nick, new_nick: $1)
           @nick = $1
@@ -131,7 +135,7 @@ class Airchat
       promisc: true,
     )
 
-    @pcap.setfilter("udp and (port 1337 or port 5353)")
+    @pcap.setfilter("udp and port #{@port}")
 
     while true
       packet = @pcap.next
@@ -146,11 +150,7 @@ class Airchat
 
         src_ip = ip.src.to_a.map(&:chr).join # Surely there's a better way
 
-        if udp.dport == @port
-          handle_message(from: src_ip, data: io.read)
-        elsif udp.dport == 5353
-          handle_mdns(from: src_ip, data: io.read)
-        end
+        handle_message(from: src_ip, data: io.read)
       end
     end
   end
@@ -192,23 +192,6 @@ class Airchat
         status_output "#{from} changed nick to #{msg.data}"
       end
       print prompt_text
-    end
-  end
-
-  def handle_mdns(from:, data:)
-    packet = Resolv::DNS::Message.decode(data)
-
-    mappings = packet.answer.select do |ans|
-      # The gem doesn't seem to handle the cache-purge flag, whatever
-      ans[2].class.to_s == "Resolv::DNS::Resource::Generic::Type28_Class32769"
-    end
-
-    mappings.each do |name, _, record|
-      if record.data != from
-        puts "Warning: record and src host mismatch"
-      else
-        @ip_to_host[record.data] = name.to_s.chomp(".local")
-      end
     end
   end
 end
