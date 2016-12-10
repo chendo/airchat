@@ -207,6 +207,13 @@ class Airchat
         if line =~ /\/nick (\w{1,32})/
           send_msg(:nick, new_nick: $1)
           @nick = $1
+        elsif line =~ /\/who/
+          status_output("Users:")
+          @ip_last_seen.each do |ip, time|
+            nick = @ip_nick[ip] || "???"
+
+            status_output("   #{nick}@#{ip} - seen #{(Time.now - time).round}s ago")
+          end
         else
           send_msg(:msg, msg: line)
         end
@@ -239,7 +246,7 @@ class Airchat
 
     Open3.popen3("tcpdump -n --immediate-mode -l -x -i awdl0 udp and port #{@port}") do |i, o, e, t|
       o.each do |line|
-        if line =~ /IP6 ([0-9a-f:]+).+ length (\d+)/
+        if line =~ /IP6 ([0-9a-f:.]+).+ length (\d+)/
           ip = $1
           len = $2.to_i
         elsif line =~ /0x(\d{4}):  ([0-9a-f ]+)/
