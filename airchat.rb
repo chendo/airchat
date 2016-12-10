@@ -165,19 +165,8 @@ class Airchat
       print "\n"
       puts "AirDrop not running, opening AirDrop window...".c(:orange)
       open_airdrop_window
-
-
-      begin
-        print "Checking if AirDrop is working.".c(:yellow)
-        Timeout.timeout(5) do
-          while Time.now - @last_awdl_activity > 5
-            print ".".c(:yellow)
-            sleep 1
-          end
-        end
-      rescue Timeout::Error
-      end
     end
+
     puts " OK".c(:green)
   end
 
@@ -187,6 +176,7 @@ class Airchat
       if Time.now - @last_awdl_activity > 60
         status_output("No AirDrop activity detected, opening AirDrop window...")
         open_airdrop_window
+        @last_awdl_activity = Time.now # so it doesn't pop up all the time
       end
       sleep 5
     end
@@ -249,6 +239,10 @@ class Airchat
         if line =~ /^\/nick (\w{1,32})/
           send_msg(:nick, new_nick: $1)
           @nick = $1
+        elsif line =~ /^\/me (.+)/
+          send_msg(:me, action: $1)
+        elsif line =~ /^\/(quit|exit)/
+          exit(0)
         elsif line =~ /^\/who/
           status_output("Users:")
           @ip_last_seen.each do |ip, time|
@@ -314,10 +308,8 @@ class Airchat
       i << <<-SCRIPT
       tell application "Finder"
           activate
-          delay 1
           tell application "System Events" to keystroke "R" using {command down, shift down}
-          delay 1
-          set collapsed of window 1 to true
+          set visible of application process "Finder" to false
       end tell
       SCRIPT
     end
@@ -336,7 +328,7 @@ class Airchat
   end
 
   def status_output(line)
-    output("* #{line}".c(:orange))
+    output(">> #{line}".c(:orange))
   end
 
   def suffix(ip)
@@ -378,6 +370,8 @@ class Airchat
         @ip_last_seen.delete(from)
       when 'msg'
         output "[#{cnick}] #{msg.data}"
+      when 'me'
+        output "* #{cnick} #{msg.data}"
       when 'nick'
         status_output "#{cnick} changed nick to #{msg.data}"
       when 'ping'
@@ -407,6 +401,10 @@ class Airchat
 
     def self.msg(from:, msg:)
       create(from: from, event: 'msg', data: msg)
+    end
+
+    def self.me(from:, action:)
+      create(from: from, event: 'me', data: action)
     end
 
     def self.nick(from:, new_nick:)
