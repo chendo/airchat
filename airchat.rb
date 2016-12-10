@@ -1,26 +1,6 @@
-require "bundler"
-Bundler.require
-
-require "ffi/pcap"
-require "ffi/packets"
 require "readline"
 require "securerandom"
 require "json"
-
-module FFI::Packets
-  module Ipv6
-    class Hdr < AutoStruct
-      dsl_layout do
-        field :v_tc_fl,            :uint32
-        field :payload_length,     :uint16
-        field :next,               :uint8
-        field :hop_limit,          :uint8
-        field :src,               [:uint8, 16]
-        field :dst,               [:uint8, 16]
-      end
-    end
-  end
-end
 
 # Airchat protocol
 # JSON
@@ -31,6 +11,12 @@ end
 
 Thread.abort_on_exception = true
 
+def debug_log(msg)
+  if ENV['DEBUG']
+    $stderr.puts msg
+  end
+end
+
 class Airchat
   class Message < Struct.new(:id, :from, :event, :data)
     def self.parse(json)
@@ -39,6 +25,8 @@ class Airchat
         data.fetch(key.to_s)
       end
       new(id, from, event, data)
+    rescue => ex
+      debug_log(ex)
     end
 
     def self.create(from:, event:, data: nil)
@@ -73,7 +61,7 @@ class Airchat
 end
 
 class Airchat
-  RELIABILITY_FACTOR = 3 # lol
+  RELIABILITY_FACTOR = 1 # lol
   def initialize(port: 1337, preamble: '__AIRCHAT:')
     @ip_to_host = {}
     @port = port
@@ -81,10 +69,11 @@ class Airchat
     @seen_messages = []
     @socket = UDPSocket.new(Socket::AF_INET6)
     @socket.connect('ff02::fb%awdl0', @port)
+    @output_mutex = Mutex.new
   end
 
   def prompt_text
-    "[#{@nick}] "
+    "\r[#{@nick}] "
   end
 
   def write(msg)
@@ -112,9 +101,12 @@ class Airchat
 
     send_msg(:join)
 
+    line = nil
     while true
-      line = Readline.readline(prompt_text).chomp
-      print "\033[1A\033[K"
+      @output_mutex.synchronize do
+        line = Readline.readline(prompt_text).chomp
+        print "\033[1A\033[K"
+      end
 
       if line.length > 0
         if line =~ /\/nick (\w{1,32})/
@@ -128,29 +120,25 @@ class Airchat
   end
 
   def listen
-    @pcap = FFI::Pcap::Live.new(
-      device: 'awdl0',
-      timeout: 1,
-      handler: FFI::PCap::Handler,
-      promisc: true,
-    )
+    ip = nil
+    len = 0
+    output_buffer = StringIO.new
+    buffer = StringIO.new
 
-    @pcap.setfilter("udp and port #{@port}")
-
-    while true
-      packet = @pcap.next
-      if packet.nil?
-        sleep 0.1
-      else
-        io = StringIO.new(packet.body)
-
-        eth = FFI::Packets::Eth.new(raw: io.read(FFI::Packets::Eth.size))
-        ip = FFI::Packets::Ipv6::Hdr.new(raw: io.read(FFI::Packets::Ipv6::Hdr.size))
-        udp = FFI::Packets::UDP.new(raw: io.read(FFI::Packets::UDP.size))
-
-        src_ip = ip.src.to_a.map(&:chr).join # Surely there's a better way
-
-        handle_message(from: src_ip, data: io.read)
+    IO.popen('tcpdump -n --immediate-mode -l -x -i awdl0 udp and port 1337') do |io|
+      io.each do |line|
+        if line =~ /IP6 ([0-9a-f:]+).+ length (\d+)/
+          ip = $1
+          len = $2.to_i
+        elsif line =~ /0x(\d{4}):  ([0-9a-f ]+)/
+          if $1.to_i >= 30 # lol
+            buffer << [$2.gsub(' ', '')].pack("H*")
+            if buffer.length == len
+              handle_message(from: ip, data: buffer.string)
+              buffer = StringIO.new
+            end
+          end
+        end
       end
     end
   end
@@ -165,10 +153,12 @@ class Airchat
 
   def handle_message(from:, data:)
     if data =~ /^#{@preamble}/
-      suffix = from[-3..-1].unpack("H*").first
+      suffix = from.split(':')[-2..-1].join(':')
 
       json = data.sub(@preamble, '')
       msg = Message.parse(json)
+
+      return if msg.nil?
 
       if @seen_messages.include?(msg.id)
         return
