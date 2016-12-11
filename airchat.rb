@@ -53,6 +53,14 @@ class SimpleCurses
       redisplay
     end
   end
+
+  # Modifies the last line
+  def reputs(str, io = STDOUT)
+    @mutex.synchronize do
+      io.puts "\033[1A\r#{CLEAR_LINE}#{str}"
+      redisplay
+    end
+  end
 end
 
 class Airchat
@@ -72,8 +80,8 @@ class Airchat
     @ip_timed_out = {}
     @last_awdl_activity = Time.at(0)
     @simple_curses = SimpleCurses.new
-    @nick = "unknown"
     check_tcpdump_immediate_mode
+    @my_ip = `ifconfig awdl0 inet6`.match(/inet6 ([0-9a-f:]+)/)[1]
   end
 
   def check_tcpdump_immediate_mode
@@ -119,10 +127,12 @@ class Airchat
     show_help
 
     at_exit do
-      send_msg(:leave).join
+      _, thr = send_msg(:leave)
+      thr.join
     end
 
-    send_msg(:join).join
+    _, thr = send_msg(:join)
+    thr.join
 
     show_who
 
@@ -143,7 +153,8 @@ class Airchat
           status_output("Unknown command: #{line}".c(:red))
           show_help
         else
-          send_msg(:msg, msg: line)
+          @last_seen_msg_acks = 0
+          @last_seen_msg, _ = send_msg(:msg, msg: line)
         end
       end
     end
@@ -163,6 +174,7 @@ class Airchat
     status_output("#{'/who'.c(:green)} - #{'list all users'.c(:cyan)}")
     status_output("#{'/me [action]'.c(:green)} - #{'perform an action'.c(:cyan)}")
     status_output("#{'/quit'.c(:green)} - #{'quits'.c(:cyan)}")
+    @simple_curses.puts("[  time  ] [# who saw msg] [nick] [message]".c(:cyan))
   end
 
   def pinger
@@ -178,7 +190,7 @@ class Airchat
       end
       lost.each do |ip|
         nick = @ip_nick[ip] || "???"
-        status_output("#{nick}@#{suffix(ip)} has timed out")
+        status_output("#{nick} @ #{ip} has timed out")
       end
     end
   end
@@ -190,7 +202,7 @@ class Airchat
 
     Open3.popen3("tcpdump -n #{@immediate_mode} -l -x -i awdl0 udp and port #{@port}") do |i, o, e, t|
       o.each do |line|
-        if line =~ /IP6 ([0-9a-f:]+).+ length (\d+)/
+        if line =~ /IP6 ([0-9a-f:.]+).+ length (\d+)/
           ip = $1
           len = $2.to_i # This is hex
         elsif line =~ /0x([0-9a-f]{4}):  ([0-9a-f ]+)/
@@ -207,6 +219,7 @@ class Airchat
         end
       end
     end
+    sleep 2
     raise "Listener exited unexpectedly"
   end
 
@@ -230,11 +243,11 @@ class Airchat
         @last_awdl_activity = Time.now
       end
     end
+    sleep 2
     raise "Airdrop Activity Monitor exited unexpectedly"
   end
 
   def handle_message(from: nil, data: nil)
-    print data if @debug
     return if @nick.nil? # We're not 'connected'
 
     if data =~ /^#{@preamble}/
@@ -259,6 +272,11 @@ class Airchat
       @ip_nick[from] = nick
       @ip_last_seen[from] = Time.now
 
+      if msg.event != 'ack'
+        ack, _ = send_msg(:ack, id: msg.id)
+        @seen_messages << ack.id
+      end
+
       case msg.event
       when 'join'
         status_output "#{cnick} has joined from #{host}"
@@ -267,13 +285,27 @@ class Airchat
         @ip_nick.delete(from)
         @ip_last_seen.delete(from)
       when 'msg'
-        output "[#{cnick}] #{msg.data}"
+        output "   [#{cnick}] #{msg.data}"
+        @last_seen_msg = msg
+        @last_seen_msg_acks = 0
       when 'me'
-        output "* #{cnick} #{msg.data}"
+        output "   * #{cnick} #{msg.data}"
+        @last_seen_msg = msg
+        @last_seen_msg_acks = 0
       when 'nick'
         status_output "#{cnick} changed nick to #{msg.data}"
       when 'ping'
-        send_msg(:pong)
+        # Covered by 'ack'
+      when 'ack'
+        if @last_seen_msg && msg.data == @last_seen_msg.id
+          @last_seen_msg_acks += 1
+          cnick = colorise_nick(@last_seen_msg.from, @my_ip)
+          if @last_seen_msg.event == 'me'
+            output "%2d * #{cnick} #{@last_seen_msg.data}" % (@last_seen_msg_acks), true
+          else
+            output "%2d [#{cnick}] #{@last_seen_msg.data}" % (@last_seen_msg_acks), true
+          end
+        end
       end
     end
   end
@@ -287,7 +319,7 @@ class Airchat
     eputs "You can either run AirDrop as root with #{'sudo ./airchat.rb'.c(:green)} or"
     eputs "modify the permissions of #{'/dev/bpf*'.c(:blue)} so your user can access it:"
     eputs "sudo chgrp staff /dev/bpf* && sudo chmod g+rw /dev/bpf*".c(:green)
-    eputs "These permission will reset on reboot, or run:"
+    eputs "These permission will reset on reboot. If you want to revert them now, run:"
     eputs "sudo chmod g-rw /dev/bpf*".c(:yellow)
     exit 1
   end
@@ -339,28 +371,32 @@ class Airchat
 
   def send_msg(type, **args)
     msg = Message.send(type, **{from: @nick}.merge(args))
-    Thread.new do
+    thr = Thread.new do
       RELIABILITY_FACTOR.times do
         write(msg)
         sleep 0.1 # To work around network delay
       end
     end
+    [msg, thr]
   end
 
-  def output(line)
-    @simple_curses.puts "\r[#{Time.now.strftime("%H:%M:%S")}] #{line}"
+  def output(line, redisplay = false)
+    str = "\r[#{Time.now.strftime("%H:%M:%S")}] #{line}"
+    if redisplay
+      @simple_curses.reputs str
+    else
+      @simple_curses.puts str
+    end
   end
 
   def status_output(line)
     output(">> #{line}".c(:orange))
   end
 
-  def suffix(ip)
-    ip.split(':')[-2..-1].join(':')
-  end
-
-  def colorise_nick(nick, host)
-    color = Digest::SHA1.digest(host).chars.map(&:ord).select { |byte| byte > 75 }[0...3]
+  def colorise_nick(nick, ip_port)
+    nick ||= ""
+    ip, _ = ip_port.split('.', 2)
+    color = Digest::SHA1.digest(ip).chars.map(&:ord).select { |byte| byte > 75 }[0...3]
     nick[0..MAX_NICK_LENGTH].c(color)
   end
 
@@ -383,6 +419,10 @@ class Airchat
       create(from: from, event: 'msg', data: msg)
     end
 
+    def self.ack(from: nil, id: nil)
+      create(from: from, event: 'ack', data: id)
+    end
+
     def self.me(from: nil, action: nil)
       create(from: from, event: 'me', data: action)
     end
@@ -401,10 +441,6 @@ class Airchat
 
     def self.ping(from: nil, data: nil)
       create(from: from, event: 'ping')
-    end
-
-    def self.pong(from: nil, data: nil)
-      create(from: from, event: 'pong')
     end
 
     def to_json
