@@ -17,70 +17,7 @@ require "timeout"
 require "digest/sha1"
 require "io/console"
 
-# Airchat protocol
-# JSON
-# from: 'nick'
-# id: uuid
-# event: [join/leave/msg/ack]
-# data: {msg: }
-
 Thread.abort_on_exception = true
-
-def debug_log(msg)
-  if ENV['DEBUG']
-    eputs msg
-  end
-end
-
-module ANSIColor
-  module_function
-
-  # from Paint gem
-  def rgb(red, green, blue)
-    gray_possible = true
-    sep = 42.5
-
-    while gray_possible
-      if red < sep || green < sep || blue < sep
-        gray = red < sep && green < sep && blue < sep
-        gray_possible = false
-      end
-      sep += 42.5
-    end
-
-    if gray
-      "\033[38;5;#{ 232 + ((red.to_f + green.to_f + blue.to_f)/33).round }m"
-    else # rgb
-      "\033[38;5;#{ [16, *[red, green, blue].zip([36, 6, 1]).map{ |color, mod|
-        (6 * (color.to_f / 256)).to_i * mod
-      }].inject(:+) }m"
-    end
-  end
-
-  COLOURS = {
-    red: [205, 0, 0],
-    yellow: [205,205,0],
-    blue: [0,0,238],
-    green: [0, 205, 0],
-    orange: [205, 120, 0],
-    cyan:    [0,205,205],
-    white: [229, 229, 229],
-  }
-  NOTHING = "\033[0m".freeze
-
-  def paint(str, color)
-    color = COLOURS[color] || color
-    "#{rgb(*color)}#{str}#{NOTHING}"
-  end
-end
-
-class String
-  def c(color)
-    ANSIColor.paint(self, color)
-  end
-end
-
-STDOUT.sync = true
 
 class SimpleCurses
   CLEAR_LINE = "\e[2K"
@@ -120,7 +57,7 @@ class SimpleCurses
 end
 
 class Airchat
-  RELIABILITY_FACTOR = 1 # lol
+  RELIABILITY_FACTOR = 3 # lol
   PING_INTERVAL = 10
   def initialize(port: 1337, preamble: '__AIRCHAT:')
     @ip_to_host = {}
@@ -129,70 +66,11 @@ class Airchat
     @seen_messages = []
     @socket = UDPSocket.new(Socket::AF_INET6)
     @socket.connect('ff02::fb%awdl0', @port)
-    @last_awdl_activity = Time.at(0)
     @ip_last_seen = {}
     @ip_nick = {}
     @ip_timed_out = {}
+    @last_awdl_activity = Time.at(0)
     @simple_curses = SimpleCurses.new
-  end
-
-  def check_permissions
-    Dir["/dev/bpf*"].each do |f|
-      FileUtils.touch(f)
-    end
-  rescue Errno::EPERM, Errno::EACCESS
-    eputs "AirChat does not have permissions to access the AirDrop interface."
-    eputs "Please run: `sudo chgrp staff /dev/bpf* && sudo chmod g+rw /dev/bpf*`"
-    eputs "re-run AirChat as root with `sudo ./airchat.rb`"
-    exit 1
-  end
-
-  def eputs(str)
-    @simple_curses.puts(str, STDERR)
-  end
-
-  def check_airdrop
-    return if ENV['SKIP_CHECK']
-    print "Checking if AirDrop is running.".c(:yellow)
-    begin
-      Timeout.timeout(5) do
-        while Time.now - @last_awdl_activity > 5
-          print ".".c(:yellow)
-          sleep 1
-        end
-      end
-    rescue Timeout::Error
-      print "\n"
-      puts "AirDrop not running, opening AirDrop window...".c(:orange)
-      open_airdrop_window
-    end
-
-    puts " OK".c(:green)
-  end
-
-  def airdrop_monitor
-    return if ENV['SKIP_CHECK']
-    while true
-      if Time.now - @last_awdl_activity > 60
-        status_output("No AirDrop activity detected, opening AirDrop window...")
-        open_airdrop_window
-        @last_awdl_activity = Time.now # so it doesn't pop up all the time
-      end
-      sleep 5
-    end
-  end
-
-  def prompt_text
-    "\r[#{@nick.c(:cyan)}] "
-  end
-
-  def write(msg)
-    @socket.write("#{@preamble}#{msg.to_json}")
-  end
-
-  def send_msg(type, **args)
-    msg = Message.send(type, **{from: @nick}.merge(args))
-    RELIABILITY_FACTOR.times { write(msg) }
   end
 
   def run
@@ -247,8 +125,7 @@ class Airchat
           status_output("Users:")
           @ip_last_seen.each do |ip, time|
             nick = @ip_nick[ip] || "???"
-
-            status_output("   #{nick}@#{ip} - seen #{(Time.now - time).round}s ago")
+            status_output("  #{colorise_nick(nick, ip)} @ #{ip} - seen #{(Time.now - time).round}s ago")
           end
         elsif line =~ /^\//
           status_output("Unknown command: #{line}".c(:red))
@@ -304,6 +181,7 @@ class Airchat
   end
 
   def open_airdrop_window
+    @last_awdl_activity = Time.now
     Open3.popen3("osascript -") do |i, o, e, t|
       i << <<-SCRIPT
       tell application "Finder"
@@ -321,18 +199,6 @@ class Airchat
         @last_awdl_activity = Time.now
       end
     end
-  end
-
-  def output(line)
-    @simple_curses.puts "\r[#{Time.now.strftime("%H:%M:%S")}] #{line}"
-  end
-
-  def status_output(line)
-    output(">> #{line}".c(:orange))
-  end
-
-  def suffix(ip)
-    ip.split(':')[-2..-1].join(':')
   end
 
   def handle_message(from:, data:)
@@ -378,6 +244,87 @@ class Airchat
         send_msg(:pong)
       end
     end
+  end
+
+  def check_permissions
+    Dir["/dev/bpf*"].each do |f|
+      FileUtils.touch(f)
+    end
+  rescue Errno::EPERM, Errno::EACCES
+    eputs "AirChat does not have permissions to access the AirDrop interface.".c(:yellow)
+    eputs "You can either run AirDrop as root with #{'sudo ./airchat.rb'.c(:green)} or"
+    eputs "modify the permissions of #{'/dev/bpf*'.c(:blue)} so your user can access it:"
+    eputs "sudo chgrp staff /dev/bpf* && sudo chmod g+rw /dev/bpf*".c(:green)
+    eputs "These permission will reset on reboot, or run:"
+    eputs "sudo chmod g-rw /dev/bpf*".c(:yellow)
+    exit 1
+  end
+
+  def check_airdrop
+    return if ENV['SKIP_CHECK']
+    puts "Keep the AirDrop window visible for best results.".c(:yellow)
+    print "Checking if AirDrop is running.".c(:yellow)
+    begin
+      Timeout.timeout(5) do
+        while Time.now - @last_awdl_activity > 5
+          print ".".c(:yellow)
+          sleep 1
+        end
+        print " "
+      end
+    rescue Timeout::Error
+      print "\n"
+      print "AirDrop not running, opening AirDrop window... ".c(:orange)
+      open_airdrop_window
+    end
+
+    puts "OK".c(:green)
+  end
+
+  def airdrop_monitor
+    return if ENV['SKIP_CHECK']
+    while true
+      if Time.now - @last_awdl_activity > 3 * 60
+        status_output("No AirDrop activity detected, opening AirDrop window...")
+        open_airdrop_window
+        @last_awdl_activity = Time.now # so it doesn't pop up all the time
+      end
+      sleep 5
+    end
+  end
+
+  def eputs(str)
+    @simple_curses.puts(str, STDERR)
+  end
+
+  def prompt_text
+    "\r[#{@nick.c(:cyan)}] "
+  end
+
+  def write(msg)
+    @socket.write("#{@preamble}#{msg.to_json}")
+  end
+
+  def send_msg(type, **args)
+    msg = Message.send(type, **{from: @nick}.merge(args))
+    Thread.new do
+      RELIABILITY_FACTOR.times do
+        write(msg)
+        sleep 0.1 # To work around network delay
+      end
+    end
+  end
+
+  def output(line)
+    @simple_curses.puts "\r[#{Time.now.strftime("%H:%M:%S")}] #{line}"
+  end
+
+  def status_output(line)
+    output(">> #{line}".c(:orange))
+  end
+
+  def suffix(ip)
+    ip.split(':')[-2..-1].join(':')
   end
 
   def colorise_nick(nick, host)
@@ -437,6 +384,63 @@ class Airchat
     end
   end
 end
+
+
+def debug_log(msg)
+  if ENV['DEBUG']
+    eputs msg
+  end
+end
+
+module ANSIColor
+  module_function
+
+  # from Paint gem
+  def rgb(red, green, blue)
+    gray_possible = true
+    sep = 42.5
+
+    while gray_possible
+      if red < sep || green < sep || blue < sep
+        gray = red < sep && green < sep && blue < sep
+        gray_possible = false
+      end
+      sep += 42.5
+    end
+
+    if gray
+      "\033[38;5;#{ 232 + ((red.to_f + green.to_f + blue.to_f)/33).round }m"
+    else # rgb
+      "\033[38;5;#{ [16, *[red, green, blue].zip([36, 6, 1]).map{ |color, mod|
+        (6 * (color.to_f / 256)).to_i * mod
+      }].inject(:+) }m"
+    end
+  end
+
+  COLOURS = {
+    red: [205, 0, 0],
+    yellow: [205,205,0],
+    blue: [0,0,238],
+    green: [0, 205, 0],
+    orange: [205, 120, 0],
+    cyan:    [0,205,205],
+    white: [229, 229, 229],
+  }
+  NOTHING = "\033[0m".freeze
+
+  def paint(str, color)
+    color = COLOURS[color] || color
+    "#{rgb(*color)}#{str}#{NOTHING}"
+  end
+end
+
+class String
+  def c(color)
+    ANSIColor.paint(self, color)
+  end
+end
+
+STDOUT.sync = true
 
 Airchat.new.run
 
