@@ -5,6 +5,9 @@ allow chatting across WiFi networks (or no WiFi network).
 
 A RailsCamp AU 20 project.
 
+![Screenshot](https://cloud.githubusercontent.com/assets/2661/21078310/7b9c0202-bfbe-11e6-8448-8aad4de69cbf.png)
+
+
 ## Features
 
 * Chat to other AirChat users in proximity without being on the same network
