@@ -52,7 +52,7 @@ class SimpleCurses
 
     buffer = !is_same_line ? (Readline.line_buffer || "") : ""
     point = !is_same_line ? Readline.point : 0
-    print "\r#{CLEAR_LINE}#{@prompt}#{buffer}#{"\b" * (buffer.length - point)}"
+    print "\r#{CLEAR_LINE}#{@prompt}#{buffer}#{"\b" * ([buffer.bytesize - point, 0].max)}"
   end
 
   def puts(str, io = STDOUT)
