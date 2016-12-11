@@ -1,11 +1,15 @@
 #!/usr/bin/env ruby
 
 # AirChat lets you chat to other people nearby who are
-# also running AirChat by (ab)using the AirDrop interface.
+# also running AirChat, even if you're not on the same network.
 #
+# AirChat does this by (ab)using the AirDrop interface.
+# It depends on Ruby 2+ and tcpdump, which should exist on
+# modern OS X installs.
 #
-
 # Usage: [sudo] ./airchat.rb
+#
+# Hacked
 
 require "readline"
 require "securerandom"
@@ -27,9 +31,8 @@ class SimpleCurses
 
   def readline(prompt = "> ", hide = true)
     @prompt = prompt
-    @reading = true
     str = Readline.readline(prompt)
-    @reading = false
+    @last_input = str.chomp
     print "\033[1A\r#{CLEAR_LINE}"
     return str
   end
@@ -43,9 +46,16 @@ class SimpleCurses
   end
 
   def redisplay
-    buffer = @reading ? Readline.line_buffer : ""
-    point = @reading ? Readline.point : 0
+    # There's a bug in Ruby 2.0 where the Readline.line_buffer isn't cleared
+    # on input
+    is_same_line = @last_input == Readline.line_buffer.chomp
+
+    buffer = !is_same_line ? Readline.line_buffer : ""
+    point = !is_same_line ? Readline.point : 0
     print "\r#{CLEAR_LINE}#{@prompt}#{buffer}#{"\b" * (buffer.length - point)}"
+    # if RUBY_VERSION == "2.0.0"
+    #   p [is_same_line, @last_input, Readline.line_buffer, buffer, point]
+    # end
   end
 
   def puts(str, io = STDOUT)
@@ -83,7 +93,9 @@ class Airchat
     end
 
     puts "Welcome to AirChat.".c(:green)
-    puts "-------------------".c(:green)
+    puts
+    puts "AirChat lets you chat to people nearby without being on the same network.".c(:green)
+    puts
 
     check_permissions
     check_airdrop
@@ -101,7 +113,7 @@ class Airchat
     end
 
     at_exit do
-      send_msg(:leave)
+      send_msg(:leave).join
     end
 
     Thread.new do
@@ -201,7 +213,7 @@ class Airchat
     end
   end
 
-  def handle_message(from:, data:)
+  def handle_message(from: nil, data: nil)
     print data if @debug
     return if @nick.nil? # We're not 'connected'
 
@@ -342,35 +354,35 @@ class Airchat
       debug_log(ex)
     end
 
-    def self.create(from:, event:, data: nil)
+    def self.create(from: nil, event: nil, data: nil)
       new(SecureRandom.uuid, from, event, data)
     end
 
-    def self.msg(from:, msg:)
+    def self.msg(from: nil, msg: nil)
       create(from: from, event: 'msg', data: msg)
     end
 
-    def self.me(from:, action:)
+    def self.me(from: nil, action: nil)
       create(from: from, event: 'me', data: action)
     end
 
-    def self.nick(from:, new_nick:)
+    def self.nick(from: nil, new_nick: nil)
       create(from: from, event: 'nick', data: new_nick)
     end
 
-    def self.join(from:, data: nil)
+    def self.join(from: nil, data: nil)
       create(from: from, event: 'join')
     end
 
-    def self.leave(from:, data: nil)
+    def self.leave(from: nil, data: nil)
       create(from: from, event: 'leave')
     end
 
-    def self.ping(from:, data: nil)
+    def self.ping(from: nil, data: nil)
       create(from: from, event: 'ping')
     end
 
-    def self.pong(from:, data: nil)
+    def self.pong(from: nil, data: nil)
       create(from: from, event: 'pong')
     end
 
