@@ -48,9 +48,9 @@ class SimpleCurses
   def redisplay
     # There's a bug in Ruby 2.0 where the Readline.line_buffer isn't cleared
     # on input
-    is_same_line = @last_input == Readline.line_buffer.chomp
+    is_same_line = @last_input == (Readline.line_buffer || "").chomp
 
-    buffer = !is_same_line ? Readline.line_buffer : ""
+    buffer = !is_same_line ? (Readline.line_buffer || "") : ""
     point = !is_same_line ? Readline.point : 0
     print "\r#{CLEAR_LINE}#{@prompt}#{buffer}#{"\b" * (buffer.length - point)}"
   end
@@ -66,6 +66,8 @@ end
 class Airchat
   RELIABILITY_FACTOR = 3 # lol
   PING_INTERVAL = 10
+  MAX_NICK_LENGTH = 20
+
   def initialize(port: 1337, preamble: '__AIRCHAT:')
     @ip_to_host = {}
     @port = port
@@ -78,6 +80,7 @@ class Airchat
     @ip_timed_out = {}
     @last_awdl_activity = Time.at(0)
     @simple_curses = SimpleCurses.new
+    @nick = "unknown"
   end
 
   def run
@@ -101,43 +104,47 @@ class Airchat
       airdrop_monitor
     end
 
-    puts
-    print "Enter your nickname: ".c(:cyan)
-
-    @nick = gets.match(/(\w{0,32})/)[1]
-    if @nick.length == 0
-      @nick = "Guest#{rand(10000)}"
+    Thread.new do
+      pinger
     end
+
+    puts
+    user = `whoami`.strip
+    print "Enter a nickname, or leave empty to use #{user.c(:green)}: ".c(:cyan)
+
+    @nick = gets.match(/(\w{0,#{MAX_NICK_LENGTH}})/)[1]
+    if @nick.empty?
+      @nick = user
+    end
+
+    puts
+
+    show_help
 
     at_exit do
       send_msg(:leave).join
     end
 
-    Thread.new do
-      pinger
-    end
+    send_msg(:join).join
 
-    send_msg(:join)
+    show_who
 
     while true
       line = @simple_curses.readline(prompt_text).chomp
 
       if line.length > 0
-        if line =~ /^\/nick (\w{1,32})/
+        if line =~ /^\/nick (\w{1,#{MAX_NICK_LENGTH}})/
           send_msg(:nick, new_nick: $1)
           @nick = $1
         elsif line =~ /^\/me (.+)/
           send_msg(:me, action: $1)
-        elsif line =~ /^\/(quit|exit)/
+        elsif line =~ /^\/(quit|exit)$/
           exit(0)
-        elsif line =~ /^\/who/
-          status_output("Users:")
-          @ip_last_seen.each do |ip, time|
-            nick = @ip_nick[ip] || "???"
-            status_output("  #{colorise_nick(nick, ip)} @ #{ip} - seen #{(Time.now - time).round}s ago")
-          end
+        elsif line =~ /^\/who$/
+          show_who
         elsif line =~ /^\//
           status_output("Unknown command: #{line}".c(:red))
+          show_help
         else
           send_msg(:msg, msg: line)
         end
@@ -145,10 +152,26 @@ class Airchat
     end
   end
 
+  def show_who
+    status_output("Users (#{@ip_last_seen.count}):")
+    @ip_last_seen.each do |ip, time|
+      nick = @ip_nick[ip] || "???"
+      status_output("  #{colorise_nick(nick, ip)} @ #{ip} - seen #{(Time.now - time).round}s ago")
+    end
+  end
+
+  def show_help
+    status_output("Commands:".c(:cyan))
+    status_output("#{'/nick [newnick]'.c(:green)} - #{'changes your nickname'.c(:cyan)}")
+    status_output("#{'/who'.c(:green)} - #{'list all users'.c(:cyan)}")
+    status_output("#{'/me [action]'.c(:green)} - #{'perform an action'.c(:cyan)}")
+    status_output("#{'/quit'.c(:green)} - #{'quits'.c(:cyan)}")
+  end
+
   def pinger
     while true
-      sleep PING_INTERVAL
       send_msg(:ping)
+      sleep PING_INTERVAL
       lost = []
       @ip_last_seen.each do |ip, time|
         if Time.now - time > (PING_INTERVAL * 3) && @ip_timed_out[ip].nil?
@@ -338,7 +361,7 @@ class Airchat
   end
 
   def colorise_nick(nick, host)
-    nick.c(Digest::SHA1.digest("hello")[0...3].chars.map(&:ord))
+    nick[0..MAX_NICK_LENGTH].c(Digest::SHA1.digest("hello")[0...3].chars.map(&:ord))
   end
 
   class Message < Struct.new(:id, :from, :event, :data)
