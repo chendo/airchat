@@ -9,7 +9,7 @@
 #
 # Usage: [sudo] ./airchat.rb
 #
-# Hacked
+# Cobbled together at Railscamp AU 20 by @chendo
 
 require "readline"
 require "securerandom"
@@ -25,6 +25,7 @@ Thread.abort_on_exception = true
 
 class SimpleCurses
   CLEAR_LINE = "\e[2K"
+  MOVE_UP    = "\033[1A"
   def initialize
     @mutex = Mutex.new
   end
@@ -33,17 +34,15 @@ class SimpleCurses
     @prompt = prompt
     str = Readline.readline(prompt)
     @last_input = str.chomp
-    print "\033[1A\r#{CLEAR_LINE}"
+    print "#{MOVE_UP}\r#{CLEAR_LINE}"
     return str
   end
 
   def redisplay
-    # There's a bug in Ruby 2.0 where the Readline.line_buffer isn't cleared
-    # on input
+    # There's a bug in Ruby 2.0 where the Readline.line_buffer isn't cleared on enter
     is_same_line = @last_input == (Readline.line_buffer || "").chomp
-
     buffer = !is_same_line ? (Readline.line_buffer || "") : ""
-    point = !is_same_line ? Readline.point : 0
+    point  = !is_same_line ? Readline.point : 0
     print "\r#{CLEAR_LINE}#{@prompt}#{buffer}#{"\b" * ([buffer.bytesize - point, 0].max)}"
   end
 
@@ -57,7 +56,7 @@ class SimpleCurses
   # Modifies the last line
   def reputs(str, io = STDOUT)
     @mutex.synchronize do
-      io.puts "\033[1A\r#{CLEAR_LINE}#{str}"
+      io.puts "#{MOVE_UP}\r#{CLEAR_LINE}#{str}"
       redisplay
     end
   end
@@ -88,14 +87,13 @@ class Airchat
     @immediate_mode = `tcpdump --help 2>&1`["--immediate-mode"]
   end
 
-  def run
-    Thread.new do
-      listen
-    end
+  def spawn(meth)
+    Thread.new(&method(meth))
+  end
 
-    Thread.new do
-      airdrop_activity_monitor
-    end
+  def run
+    spawn(:listen)
+    spawn(:airdrop_activity_monitor)
 
     puts "Welcome to AirChat.".c(:green)
     puts
@@ -105,13 +103,8 @@ class Airchat
     check_permissions
     check_airdrop
 
-    Thread.new do
-      airdrop_monitor
-    end
-
-    Thread.new do
-      pinger
-    end
+    spawn(:airdrop_monitor)
+    spawn(:pinger)
 
     puts
     user = ENV.fetch('HOME').sub('/Users/', '')
@@ -149,6 +142,8 @@ class Airchat
           exit(0)
         elsif line =~ /^\/who$/
           show_who
+        elsif line =~ /^\/help$/
+          show_help
         elsif line =~ /^\//
           status_output("Unknown command: #{line}".c(:red))
           show_help
@@ -454,7 +449,6 @@ class Airchat
   end
 end
 
-
 def debug_log(msg)
   if ENV['DEBUG']
     eputs msg
@@ -487,13 +481,13 @@ module ANSIColor
   end
 
   COLOURS = {
-    red: [205, 0, 0],
-    yellow: [205,205,0],
-    blue: [0,0,238],
-    green: [0, 205, 0],
+    red:    [205, 0,   0],
+    yellow: [205, 205, 0],
+    blue:   [0,   0,   238],
+    green:  [0,   205, 0],
     orange: [205, 120, 0],
-    cyan:    [0,205,205],
-    white: [229, 229, 229],
+    cyan:   [0,   205, 205],
+    white:  [229, 229, 229],
   }
   NOTHING = "\033[0m".freeze
 
