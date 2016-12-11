@@ -37,14 +37,6 @@ class SimpleCurses
     return str
   end
 
-  def cur_pos
-    STDOUT.noecho do
-      print "\033[6n"
-      STDIN.gets('R') =~ /\[(\d+);(\d+)R/
-    end
-    [$1.to_i, $2.to_i]
-  end
-
   def redisplay
     # There's a bug in Ruby 2.0 where the Readline.line_buffer isn't cleared
     # on input
@@ -198,7 +190,7 @@ class Airchat
 
     Open3.popen3("tcpdump -n #{@immediate_mode} -l -x -i awdl0 udp and port #{@port}") do |i, o, e, t|
       o.each do |line|
-        if line =~ /IP6 ([0-9a-f:.]+).+ length (\d+)/
+        if line =~ /IP6 ([0-9a-f:]+).+ length (\d+)/
           ip = $1
           len = $2.to_i # This is hex
         elsif line =~ /0x([0-9a-f]{4}):  ([0-9a-f ]+)/
@@ -368,7 +360,8 @@ class Airchat
   end
 
   def colorise_nick(nick, host)
-    nick[0..MAX_NICK_LENGTH].c(Digest::SHA1.digest("hello")[0...3].chars.map(&:ord))
+    color = Digest::SHA1.digest(host).chars.map(&:ord).select { |byte| byte > 75 }[0...3]
+    nick[0..MAX_NICK_LENGTH].c(color)
   end
 
   class Message < Struct.new(:id, :from, :event, :data)
