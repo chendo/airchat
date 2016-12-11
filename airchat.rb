@@ -81,6 +81,11 @@ class Airchat
     @last_awdl_activity = Time.at(0)
     @simple_curses = SimpleCurses.new
     @nick = "unknown"
+    check_tcpdump_immediate_mode
+  end
+
+  def check_tcpdump_immediate_mode
+    @immediate_mode = `tcpdump --help 2>&1`["--immediate-mode"]
   end
 
   def run
@@ -191,7 +196,7 @@ class Airchat
     len = 0
     buffer = StringIO.new
 
-    Open3.popen3("tcpdump -n --immediate-mode -l -x -i awdl0 udp and port #{@port}") do |i, o, e, t|
+    Open3.popen3("tcpdump -n #{@immediate_mode} -l -x -i awdl0 udp and port #{@port}") do |i, o, e, t|
       o.each do |line|
         if line =~ /IP6 ([0-9a-f:.]+).+ length (\d+)/
           ip = $1
@@ -210,6 +215,7 @@ class Airchat
         end
       end
     end
+    raise "Listener exited unexpectedly"
   end
 
   def open_airdrop_window
@@ -227,11 +233,12 @@ class Airchat
   end
 
   def airdrop_activity_monitor
-    Open3.popen3("tcpdump -n --immediate-mode -l -x -i awdl0 not port #{@port}") do |i, o, e, t|
+    Open3.popen3("tcpdump -n #{@immediate_mode} -l -x -i awdl0 not port #{@port}") do |i, o, e, t|
       o.each do
         @last_awdl_activity = Time.now
       end
     end
+    raise "Airdrop Activity Monitor exited unexpectedly"
   end
 
   def handle_message(from: nil, data: nil)
