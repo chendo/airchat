@@ -57,3 +57,5 @@ AirChat broadcasts JSON-encoded messages in UDP to `ff02::fb` on port `1337`.
 ## License
 
 MIT.
+
+ANSI RGB magic sauce from the [paint gem](https://github.com/janlelis/paint).

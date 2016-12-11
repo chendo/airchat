@@ -464,7 +464,7 @@ end
 module ANSIColor
   module_function
 
-  # from Paint gem
+  # mostly from Paint gem: https://github.com/janlelis/paint
   def rgb(red, green, blue)
     gray_possible = true
     sep = 42.5
