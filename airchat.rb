@@ -53,9 +53,6 @@ class SimpleCurses
     buffer = !is_same_line ? Readline.line_buffer : ""
     point = !is_same_line ? Readline.point : 0
     print "\r#{CLEAR_LINE}#{@prompt}#{buffer}#{"\b" * (buffer.length - point)}"
-    # if RUBY_VERSION == "2.0.0"
-    #   p [is_same_line, @last_input, Readline.line_buffer, buffer, point]
-    # end
   end
 
   def puts(str, io = STDOUT)
@@ -196,11 +193,12 @@ class Airchat
     @last_awdl_activity = Time.now
     Open3.popen3("osascript -") do |i, o, e, t|
       i << <<-SCRIPT
-      tell application "Finder"
-          activate
-          tell application "System Events" to keystroke "R" using {command down, shift down}
-          set visible of application process "Finder" to false
-      end tell
+        tell application "System Events"
+          set frontmostProcess to (path to frontmost application as text)
+        end tell
+        activate application "Finder"
+        tell application "System Events" to keystroke "R" using {command down, shift down}
+        activate application frontmostProcess
       SCRIPT
     end
   end
