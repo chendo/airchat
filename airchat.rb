@@ -114,7 +114,7 @@ class Airchat
     end
 
     puts
-    user = `whoami`.strip
+    user = ENV.fetch('HOME').sub('/Users/', '')
     print "Enter a nickname, or leave empty to use #{user.c(:green)}: ".c(:cyan)
 
     @nick = gets.match(/(\w{0,#{MAX_NICK_LENGTH}})/)[1]
