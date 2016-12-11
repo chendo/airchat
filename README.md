@@ -7,20 +7,19 @@ A RailsCamp AU 20 project.
 
 ![Screenshot](https://cloud.githubusercontent.com/assets/2661/21078310/7b9c0202-bfbe-11e6-8448-8aad4de69cbf.png)
 
-
 ## Features
 
 * Chat to other AirChat users in proximity without being on the same network
 * Self-contained - no gems, nothing else to download/install
 * Automatically keeps AirDrop active
-* `/nick`, `/who`, `/me`, `/quit`
+* Commands: `/nick`, `/who`, `/me`, `/quit`
 * User colours tied to their IPv6 address
 
 ## Requirements
 
-* OS X 10.9+ with working AirDrop
-* Ruby 2.0 or higher (comes with 10.9+)
-* tcpdump (comes with 10.9+)
+* OS X with system Ruby 2+ with working AirDrop
+* Ruby 2.0 or higher (comes with OS X)
+* tcpdump (comes with OS X)
 
 ## Usage
 
@@ -53,6 +52,7 @@ AirChat broadcasts JSON-encoded messages in UDP to `ff02::fb` on port `1337`.
 * No direct messaging
 * One channel only (you can specify a different port by modifying the source)
 * Message delivery is not guaranteed
+* No message repeater functionality
 
 ## License
 
