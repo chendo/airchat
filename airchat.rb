@@ -21,6 +21,7 @@ require "readline"
 require "securerandom"
 require "json"
 require "socket"
+require "stringio"
 require "open3"
 require "fileutils"
 require "timeout"
@@ -86,7 +87,8 @@ class Airchat
     @last_awdl_activity = Time.at(0)
     @simple_curses = SimpleCurses.new
     check_tcpdump_immediate_mode
-    @my_ip = `ifconfig awdl0 inet6`.match(/inet6 ([0-9a-f:]+)/)[1]
+    inet_match = `ifconfig awdl0 inet6`.match(/inet6 ([0-9a-f:]+)/)
+    @my_ip = inet_match ? inet_match[1] : nil
   end
 
   def check_tcpdump_immediate_mode
@@ -116,7 +118,9 @@ class Airchat
     user = ENV.fetch('HOME').sub('/Users/', '')
     print "Enter a nickname, or leave empty to use #{user.c(:green)}: ".c(:cyan)
 
-    @nick = gets.match(/(\w{0,#{MAX_NICK_LENGTH}})/)[1]
+    input = gets
+    exit(0) if input.nil?
+    @nick = input.match(/(\w{0,#{MAX_NICK_LENGTH}})/)[1]
     if @nick.empty?
       @nick = user
     end
@@ -206,14 +210,12 @@ class Airchat
         if line =~ /IP6 ([0-9a-f:.]+).+ length (\d+)/
           ip = $1
           len = $2.to_i # This is hex
+          buffer = StringIO.new
         elsif line =~ /0x([0-9a-f]{4}):  ([0-9a-f ]+)/
           if $1.to_i(16) >= 0x30 # We only want the UDP data, which starts at 0x0030
             buffer << [$2.gsub(' ', '')].pack("H*")
-            if buffer.length > len
-              raise "expected buffer length to be #{len} but got #{buffer.length}"
-            end
-            if buffer.length == len
-              handle_message(from: ip, data: buffer.string)
+            if buffer.length >= len
+              handle_message(from: ip, data: buffer.string[0, len])
               buffer = StringIO.new
             end
           end
@@ -235,6 +237,7 @@ class Airchat
         tell application "System Events" to keystroke "R" using {command down, shift down}
         activate application frontmostProcess
       SCRIPT
+      i.close
     end
   end
 
@@ -396,7 +399,7 @@ class Airchat
 
   def colorise_nick(nick, ip_port)
     nick ||= ""
-    ip, _ = ip_port.split('.', 2)
+    ip, _ = ip_port.to_s.split('.', 2)
     color = Digest::SHA1.digest(ip).chars.map(&:ord).select { |byte| byte > 75 }[0...3]
     nick[0..MAX_NICK_LENGTH].c(color)
   end
